@@ -12,6 +12,7 @@ export type Handler = (ctx: Ctx, ...args: unknown[]) => Promise<unknown>;
 export const handlers: Record<string, Handler> = {
   'auth.requestEmailCode': auth.requestEmailCode,
   'auth.verifyEmailCode': auth.verifySignupEmailCode,
+  'auth.provisionSignup': auth.provisionSignup,
   'auth.signup': auth.completeSupabaseSignup,
   'auth.migrate': migrate,
   'auth.me': auth.me,

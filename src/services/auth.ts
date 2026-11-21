@@ -144,7 +144,7 @@ export async function verifySignupEmailCode(ctx: Ctx, emailArg: unknown, codeArg
 }
 
 // ---------- 가입 · 로그인 ----------
-async function createProfile(ctx: Ctx, inputArg: unknown, supabaseId?: string) {
+async function createProfile(ctx: Ctx, inputArg: unknown, supabaseId?: string | (() => Promise<string>)) {
   const input = (inputArg ?? {}) as Row;
   const email = normEmail(str(input.email, 200));
   const nickname = str(input.nickname, 100).trim();
@@ -164,16 +164,16 @@ async function createProfile(ctx: Ctx, inputArg: unknown, supabaseId?: string) {
     throw new HttpError(403, '이메일 인증을 먼저 완료해주세요.');
   }
   await assertNicknameAvailable(ctx, nickname);
-  if (!supabaseId) assertPassword(password);
+  if (typeof supabaseId !== 'string') assertPassword(password);
   const identity = normalizeIdentity(
     { name: str(idInput.name, 100), birthDate: str(idInput.birthDate, 20), phone: str(idInput.phone, 30) },
     ctx.now(),
   );
 
-  const id = supabaseId ?? newId();
+  const id = typeof supabaseId === 'function' ? await supabaseId() : supabaseId ?? newId();
   const created = await ctx.db.from('users').insert({
     id, email, password_hash: supabaseId ? "supabase" : await hashPassword(password), nickname, nickname_key: nicknameKey(nickname),
-    ...(supabaseId ? { auth_user_id: supabaseId } : {}),
+    ...(supabaseId ? { auth_user_id: id } : {}),
     role: 'user', leaves: 0, earned_today: 0, earned_date: null, created_at: iso(ctx),
   });
   if (isUniqueViolation(created.error)) throw new HttpError(409, '이미 사용 중인 이메일 또는 닉네임이에요.');
@@ -197,6 +197,38 @@ async function createProfile(ctx: Ctx, inputArg: unknown, supabaseId?: string) {
 export async function signup(ctx: Ctx, input: unknown) {
   const user = await createProfile(ctx, input);
   return { token: signToken(user.id, ctx.env.authSecret, ctx.now().getTime()), user: await userView(ctx, user) };
+}
+
+export async function provisionSignup(ctx: Ctx, inputArg: unknown) {
+  const input = (inputArg ?? {}) as Row;
+  const email = normEmail(str(input.email, 200));
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (password.length > 200) throw new HttpError(400, '비밀번호는 200자까지 입력할 수 있어요.');
+  if (!email || verifyToken(str(input.emailProof, 2000), `signup-email:${ctx.env.authSecret}`, ctx.now().getTime()) !== email) {
+    throw new HttpError(403, '가입할 이메일의 인증번호를 먼저 확인해주세요.');
+  }
+
+  let createdId: string | undefined;
+  try {
+    await createProfile(ctx, input, async () => {
+      const { data, error } = await ctx.db.auth.admin.createUser({ email, password, email_confirm: true });
+      if (error?.code === 'email_exists' || error?.code === 'user_already_exists') {
+        throw new HttpError(409, 'Supabase에 이미 등록된 이메일이에요. 기존 확인 메일을 받은 경우 그 링크로 확인한 뒤, 처음 가입할 때 입력한 비밀번호로 다시 가입을 시도해주세요.');
+      }
+      if (error?.code === 'weak_password') throw new HttpError(400, 'Supabase 비밀번호 요건을 충족하는 비밀번호를 입력해주세요.');
+      if (error || !data.user) throw new HttpError(502, '계정을 생성하지 못했어요. 잠시 뒤 다시 시도해주세요.');
+      createdId = data.user.id;
+      return createdId;
+    });
+  } catch (error) {
+    // Only clean up the Auth user created by this request, and only if no profile was saved.
+    if (createdId) {
+      const row = await ctx.db.from('users').select('id').eq('auth_user_id', createdId).maybeSingle();
+      if (!row.error && !row.data) await ctx.db.auth.admin.deleteUser(createdId);
+    }
+    throw error;
+  }
+  return { created: true };
 }
 
 export async function completeSupabaseSignup(ctx: Ctx, inputArg: unknown) {
