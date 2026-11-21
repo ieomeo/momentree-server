@@ -1,0 +1,32 @@
+{
+  "name": "momentree-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "dev": "tsx watch server.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "auth:setup-naver": "tsx scripts/setup-naver-oidc.ts",
+    "auth:check": "tsx scripts/check-auth.ts",
+    "db:check": "tsx scripts/check-db.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "cors": "^2.8.5",
+    "dotenv": "17.2.2",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "description": "Momentree API server (Express + Supabase PostgreSQL)"
+}
