@@ -46,6 +46,7 @@ export const handlers: Record<string, Handler> = {
   'profile.saveBio': profile.saveBio,
   'direct.send': profile.send,
   'direct.inbox': profile.inbox,
+  'direct.detail': profile.noteDetail,
   'direct.report': profile.report,
   'leaf.logs': social.leafLogs,
   'note.today': social.noteToday,
