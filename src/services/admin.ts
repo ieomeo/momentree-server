@@ -43,19 +43,11 @@ export async function setReportStatus(ctx: Ctx, idArg: unknown, statusArg: unkno
 // 조치·복구·회수·감사 기록은 DB에서 한 트랜잭션으로 적용합니다.
 export async function resolveReport(ctx: Ctx, idArg: unknown, actionArg: unknown, daysArg?: unknown, stopArg?: unknown): Promise<void> {
   const admin = requireAdmin(ctx);
-  const action = str(actionArg, 30);
+  const requestedAction = str(actionArg, 30);
+  const action = requestedAction === '경고 및 삭제' ? '경고 및 게시 중단' : requestedAction;
   const id = str(idArg, 60);
   if (action === '경고' || action === '게시 중단') {
     throw new HttpError(409, '이전 화면이에요. 새로고침해 경고 및 게시 중단 버튼을 사용해주세요.');
-  }
-  if (action === '경고 및 삭제') {
-    const result = await ctx.db.rpc('warn_and_delete_report_target', { p_report: id, p_actor: admin.id });
-    if (result.error?.code === 'PGRST202' || result.error?.code === '42883') {
-      throw new HttpError(503, '삭제 기능의 Supabase 마이그레이션(20261120)을 먼저 적용해주세요.');
-    }
-    if (result.error?.code === 'P0001') throw new HttpError(400, result.error.message);
-    check(result);
-    return;
   }
   if (!REPORT_ACTIONS.includes(action)) throw new HttpError(400, '처리 방법이 올바르지 않아요.');
   const days = action === '이용 제한' ? daysArg : null;
