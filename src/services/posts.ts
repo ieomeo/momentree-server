@@ -21,6 +21,7 @@ export async function toViews(ctx: Ctx, rows: Row[]) {
       id: r.id as string,
       authorId: (r.author_id as string | null) ?? '',
       nickname: author ? (author.nickname as string) : DELETED_NICKNAME,
+      authorAvatar: (author?.avatar as string | null | undefined) ?? undefined,
       category: r.category as string,
       title: r.title as string,
       content: r.content as string,
@@ -41,12 +42,13 @@ const rank = (p: { category: string; pinned?: boolean }): number => (p.category 
 const time = (p: { createdAt: string }): number => Date.parse(p.createdAt);
 
 // 공개 글 후보 (최근 순)
-async function publicRows(ctx: Ctx, category: string | null, limit: number, firstOnly = false): Promise<Row[]> {
+async function publicRows(ctx: Ctx, category: string | null, limit: number, firstOnly = false, excludeNotices = false): Promise<Row[]> {
   const me = requireUser(ctx);
   let query = ctx.db.from('posts').select('*').eq('hidden', false).neq('moderation_hidden', true).eq('is_private', false);
   if (firstOnly) query = query.eq('is_first_post', true).not('author_id', 'is', null);
   if (category) query = query.eq('category', category);
-  const rows = check(await query.order('created_at', { ascending: false }).limit(limit)) as Row[];
+  if (excludeNotices) query = query.neq('category', NOTICE_CATEGORY);
+  const rows = check(await query.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit)) as Row[];
   const hidden = await hiddenAuthorIds(ctx, me.id);
   return rows.filter((r) => !hidden.has(r.author_id as string));
 }
@@ -55,8 +57,13 @@ async function publicRows(ctx: Ctx, category: string | null, limit: number, firs
 export async function list(ctx: Ctx, categoryArg: unknown, sortArg: unknown) {
   const category = str(categoryArg, 50) || '전체';
   const sort = sortArg === 'likes' || sortArg === 'newcomers' ? sortArg : 'latest';
-  const rows = await publicRows(ctx, category === '전체' ? null : category, 200, sort === 'newcomers');
-  let views: View[] = await toViews(ctx, rows);
+  const mixedFeed = category === '전체' && sort !== 'newcomers';
+  const [rows, notices] = await Promise.all([
+    publicRows(ctx, category === '전체' ? null : category, 200, sort === 'newcomers', mixedFeed),
+    // Query notices separately so a busy feed cannot push the last notice out.
+    mixedFeed ? publicRows(ctx, NOTICE_CATEGORY, 200) : Promise.resolve([]),
+  ]);
+  let views: View[] = await toViews(ctx, [...notices.slice(0, 1), ...rows]);
   if (sort === 'likes') {
     // 공감순은 최근 24시간 안에 올린 글만 (공지·고정글은 항상 맨 위에 남아요)
     const cutoff = ctx.now().getTime() - LIKES_WINDOW_MS;

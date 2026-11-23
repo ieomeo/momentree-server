@@ -1,7 +1,7 @@
 import { HttpError } from '../lib/errors';
 import {
   type Ctx, NOTE_MAX, REPORT_REASONS, type Row, SUBSCRIBE_COST,
-  assertNotRestricted, check, iso, newId, pushNotifications, requireUser, selectIn, shorten, str,
+  assertNotRestricted, check, isSuperAdmin, iso, newId, pushNotifications, requireUser, selectIn, shorten, str,
 } from './common';
 
 // ---------- 구독 · 차단 ----------
@@ -16,7 +16,9 @@ export async function subscribe(ctx: Ctx, authorIdArg: unknown): Promise<void> {
     await ctx.db.from('subscriptions').select('author_id').eq('subscriber_id', me.id).eq('author_id', authorId).maybeSingle(),
   );
   if (already) throw new HttpError(409, '이미 구독 중이에요.');
-  const result = check(await ctx.db.rpc('subscribe_with_leaves', { p_user: me.id, p_author: authorId, p_label: `구독 (${target.nickname})` }));
+  const result = isSuperAdmin(ctx, me)
+    ? ((check(await ctx.db.from('subscriptions').upsert({ subscriber_id: me.id, author_id: authorId }, { onConflict: 'subscriber_id,author_id', ignoreDuplicates: true }).select('author_id')) as Row[]).length ? 'ok' : 'duplicate')
+    : check(await ctx.db.rpc('subscribe_with_leaves', { p_user: me.id, p_author: authorId, p_label: `구독 (${target.nickname})` }));
   if (result === 'insufficient') throw new HttpError(400, `나뭇잎이 부족해요. (${SUBSCRIBE_COST}개 필요)`);
   if (result === 'duplicate') throw new HttpError(409, '이미 구독 중이에요.');
   await pushNotifications(ctx, [{ userId: authorId, type: 'subscribe', text: `${me.nickname}님이 나를 구독했어요` }]);

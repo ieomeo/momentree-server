@@ -112,7 +112,7 @@ export function requireSuperAdmin(ctx: Ctx): UserRow {
 // ---------- 사용자 조회 ----------
 export async function usersByIds(ctx: Ctx, ids: string[]): Promise<Map<string, Row>> {
   const unique = [...new Set(ids.filter(Boolean))];
-  const rows = unique.length ? await selectIn(ctx, 'users', 'id,nickname,role', 'id', unique) : [];
+  const rows = unique.length ? await selectIn(ctx, 'users', 'id,nickname,role,avatar', 'id', unique) : [];
   return new Map(rows.map((r) => [r.id as string, r]));
 }
 

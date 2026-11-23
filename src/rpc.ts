@@ -1,3 +1,4 @@
+import * as profile from './services/profile';
 import * as admin from './services/admin';
 import { migrate } from './services/supabase-auth';
 import * as auth from './services/auth';
@@ -40,6 +41,12 @@ export const handlers: Record<string, Handler> = {
   'social.unblock': social.unblock,
   'social.blockedUsers': social.blockedUsers,
 
+  'profile.get': profile.profile,
+  'profile.garden': profile.garden,
+  'profile.saveBio': profile.saveBio,
+  'direct.send': profile.send,
+  'direct.inbox': profile.inbox,
+  'direct.report': profile.report,
   'leaf.logs': social.leafLogs,
   'note.today': social.noteToday,
   'note.save': social.saveNote,
