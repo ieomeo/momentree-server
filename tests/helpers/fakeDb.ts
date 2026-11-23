@@ -82,6 +82,7 @@ export function createFakeDb(now = () => new Date()) {
       return this;
     }
     eq(col: string, value: unknown) { this.filters.push((r) => r[col] === value); return this; }
+    is(col: string, value: null) { this.filters.push((r) => (r[col] ?? null) === value); return this; }
     neq(col: string, value: unknown) { this.filters.push((r) => r[col] !== value); return this; }
     lt(col: string, value: unknown) { this.filters.push((r) => r[col] !== undefined && r[col] !== null && r[col] < (value as never)); return this; }
     in(col: string, values: unknown[]) { this.filters.push((r) => values.includes(r[col])); return this; }

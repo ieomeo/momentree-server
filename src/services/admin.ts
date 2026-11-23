@@ -28,7 +28,7 @@ export async function reports(ctx: Ctx) {
     id: r.id as string, targetType: r.target_type as string, targetId: r.target_id as string,
     targetPreview: r.target_preview as string, reason: r.reason as string, detail: (r.detail as string | null) ?? undefined,
     reporterId: (r.reporter_id as string | null) ?? '', status: r.status as string,
-    stopped: r.moderation_stopped === true, days: r.moderation_days as number | null,
+    targetDeleted: r.moderation_deleted === true, stopped: r.moderation_stopped === true, days: r.moderation_days as number | null,
     action: (r.action as string | null) ?? undefined, createdAt: r.created_at as string,
   }));
 }
@@ -44,14 +44,38 @@ export async function setReportStatus(ctx: Ctx, idArg: unknown, statusArg: unkno
 export async function resolveReport(ctx: Ctx, idArg: unknown, actionArg: unknown, daysArg?: unknown, stopArg?: unknown): Promise<void> {
   const admin = requireAdmin(ctx);
   const action = str(actionArg, 30);
+  const id = str(idArg, 60);
+  if (action === '경고' || action === '게시 중단') {
+    throw new HttpError(409, '이전 화면이에요. 새로고침해 경고 및 게시 중단 버튼을 사용해주세요.');
+  }
+  if (action === '경고 및 삭제') {
+    const result = await ctx.db.rpc('warn_and_delete_report_target', { p_report: id, p_actor: admin.id });
+    if (result.error?.code === 'PGRST202' || result.error?.code === '42883') {
+      throw new HttpError(503, '삭제 기능의 Supabase 마이그레이션(20261120)을 먼저 적용해주세요.');
+    }
+    if (result.error?.code === 'P0001') throw new HttpError(400, result.error.message);
+    check(result);
+    return;
+  }
   if (!REPORT_ACTIONS.includes(action)) throw new HttpError(400, '처리 방법이 올바르지 않아요.');
   const days = action === '이용 제한' ? daysArg : null;
   if (action === '이용 제한' && (typeof days !== 'number' || !RESTRICT_DAYS.includes(days))) {
     throw new HttpError(400, '이용 제한 기간을 선택해주세요.');
   }
+  if (action === '문제 없음') {
+    // 처음 처리하는 신고는 조치를 되돌릴 것도, 알림을 보낼 것도 없어요.
+    // 조건부 갱신으로 다른 운영자가 방금 적용한 조치를 덮어쓰지 않아요.
+    const closed = check(await ctx.db.from('reports').update({ status: 'done', action })
+      .eq('id', id).is('action', null).select('id').maybeSingle());
+    if (closed) return;
+    const current = check(await ctx.db.from('reports').select('status,action').eq('id', id).maybeSingle()) as Row | null;
+    if (!current) throw new HttpError(404, '신고를 찾을 수 없어요.');
+    if (current.action === action && current.status === 'done') return;
+  }
   const result = await ctx.db.rpc('resolve_moderation', {
-    p_report: str(idArg, 60), p_actor: admin.id, p_action: action, p_days: days, p_stop: stopArg === true,
+    p_report: id, p_actor: admin.id, p_action: action, p_days: days, p_stop: stopArg === true,
   });
+  if (result.error?.code === 'PGRST202' || result.error?.code === '42883') throw new HttpError(503, '기존 조치 변경에 필요한 Supabase 마이그레이션을 먼저 적용해주세요.');
   if (result.error?.code === 'P0001') throw new HttpError(400, result.error.message);
   check(result);
 }
