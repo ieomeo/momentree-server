@@ -1,6 +1,6 @@
 import { HttpError } from '../lib/errors';
 import {
-  Ctx, NOTE_MAX, REPORT_REASONS, Row, SUBSCRIBE_COST,
+  type Ctx, NOTE_MAX, REPORT_REASONS, type Row, SUBSCRIBE_COST,
   assertNotRestricted, check, iso, newId, pushNotifications, requireUser, selectIn, shorten, str,
 } from './common';
 

@@ -1,5 +1,5 @@
 import { hashPassword, verifyPassword } from '../lib/security';
-import { Ctx, Row, UserRow, check, iso, newId, nicknameKey } from './common';
+import { type Ctx, type Row, type UserRow, check, iso, newId, nicknameKey } from './common';
 
 export async function ensureSuperAdmin(ctx: Ctx): Promise<void> {
   const { db, env } = ctx;

@@ -2,7 +2,7 @@ import { HttpError } from '../lib/errors';
 import { hashPassword } from '../lib/security';
 import { assertEmailAvailable, assertNicknameAvailable, assertPassword } from './auth';
 import {
-  Ctx, EMAIL_PATTERN, REPORT_ACTIONS, RESTRICT_DAYS, Row, UserRow,
+  type Ctx, EMAIL_PATTERN, REPORT_ACTIONS, RESTRICT_DAYS, type Row, type UserRow,
   check, isSuperAdmin, isUniqueViolation, iso, newId, nicknameKey, normEmail, pushNotifications,
   requireAdmin, requireSuperAdmin, str,
 } from './common';

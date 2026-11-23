@@ -2,7 +2,7 @@ import { createDb } from '../config/supabase';
 import { HttpError } from '../lib/errors';
 import { hashCode, hashPassword, randomCode, signToken, verifyPassword, verifyToken } from '../lib/security';
 import {
-  Ctx, DELETED_NICKNAME, EMAIL_PATTERN, MIN_AGE, NICKNAME_MAX, Row, UserRow, WITHDRAW_BLOCK_DAYS,
+  type Ctx, DELETED_NICKNAME, EMAIL_PATTERN, MIN_AGE, NICKNAME_MAX, type Row, type UserRow, WITHDRAW_BLOCK_DAYS,
   check, isSuperAdmin, isUniqueViolation, iso, newId, nicknameKey, normEmail, requireUser, str, userView,
 } from './common';
 

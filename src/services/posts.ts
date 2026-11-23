@@ -1,7 +1,7 @@
 import { HttpError } from '../lib/errors';
 import { countCrisisKeywords } from '../lib/crisis';
 import {
-  ALL_CATEGORIES, Ctx, DELETED_NICKNAME, LIKES_WINDOW_MS, NOTICE_CATEGORY, Row, UserRow,
+  ALL_CATEGORIES, type Ctx, DELETED_NICKNAME, LIKES_WINDOW_MS, NOTICE_CATEGORY, type Row, type UserRow,
   check, earnLeaves, hiddenAuthorIds, isUniqueViolation, iso, newId, pushNotifications,
   assertNotRestricted, requireAdmin, requireUser, selectIn, shorten, str, usersByIds,
 } from './common';
