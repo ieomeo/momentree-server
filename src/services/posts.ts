@@ -136,10 +136,7 @@ export async function get(ctx: Ctx, idArg: unknown) {
   return (await toViews(ctx, [post]))[0];
 }
 
-// ---------- 글쓰기 ----------
-export async function create(ctx: Ctx, inputArg: unknown) {
-  const me = requireUser(ctx);
-  assertNotRestricted(ctx, me);
+function postFields(me: UserRow, inputArg: unknown) {
   const input = (inputArg ?? {}) as Row;
   const category = str(input.category, 50);
   const title = str(input.title, 300).trim();
@@ -150,6 +147,57 @@ export async function create(ctx: Ctx, inputArg: unknown) {
   if (title.length > 60) throw new HttpError(400, '제목은 60자 이하로 입력해주세요.');
   if (!content) throw new HttpError(400, '내용을 입력해주세요.');
   if (content.length > 1000) throw new HttpError(400, '내용은 1000자 이하로 입력해주세요.');
+  return { category, title, content };
+}
+
+export async function update(ctx: Ctx, idArg: unknown, inputArg: unknown) {
+  const me = requireUser(ctx);
+  assertNotRestricted(ctx, me);
+  const id = str(idArg, 60);
+  const post = await loadPost(ctx, id);
+  if (post.author_id !== me.id) throw new HttpError(403, '자신이 쓴 글만 수정할 수 있어요.');
+  if (post.hidden) throw new HttpError(404, '글을 찾을 수 없어요.');
+  const fields = postFields(me, inputArg);
+  if ((fields.category === NOTICE_CATEGORY) !== (post.category === NOTICE_CATEGORY)) {
+    throw new HttpError(400, '수정할 때는 공지글 유형을 변경할 수 없어요.');
+  }
+  const updated = check(await ctx.db.from('posts').update(fields)
+    .eq('id', id).eq('author_id', me.id).eq('hidden', false).select('*').maybeSingle()) as Row | null;
+  if (!updated) throw new HttpError(404, '글을 찾을 수 없어요.');
+  const count = countCrisisKeywords(`${fields.title} ${fields.content}`);
+  if (count > 0 && (fields.title !== post.title || fields.content !== post.content)) {
+    await flagCrisis(ctx, id, count);
+    await notifyCrisis(ctx, me, fields.title);
+  }
+  return (await toViews(ctx, [updated]))[0];
+}
+
+async function flagCrisis(ctx: Ctx, id: string, keywordCount: number) {
+    check(
+      await ctx.db.from('crisis_alerts').insert({
+        id: newId(), post_id: id, keyword_count: keywordCount, status: 'pending', care_sent: false, created_at: iso(ctx),
+      }),
+    );
+}
+
+async function notifyCrisis(ctx: Ctx, me: UserRow, title: string) {
+    const admins = check(await ctx.db.from('users').select('id').eq('role', 'admin').neq('id', me.id)) as Row[];
+    await pushNotifications(
+      ctx,
+      admins.map((a) => ({
+        userId: a.id as string,
+        type: 'crisis' as const,
+        text: `위기 알림: ‘${shorten(title)}’ 글에서 위기 키워드가 감지됐어요. 대시보드에서 확인해 주세요.`,
+        link: '/admin',
+      })),
+    );
+}
+
+// ---------- 글쓰기 ----------
+export async function create(ctx: Ctx, inputArg: unknown) {
+  const me = requireUser(ctx);
+  assertNotRestricted(ctx, me);
+  const { category, title, content } = postFields(me, inputArg);
 
   const id = newId();
   check(
@@ -161,11 +209,7 @@ export async function create(ctx: Ctx, inputArg: unknown) {
   // 위기 키워드는 서버가 직접 세서 운영자에게 알립니다.
   const keywordCount = countCrisisKeywords(`${title} ${content}`);
   if (keywordCount > 0) {
-    check(
-      await ctx.db.from('crisis_alerts').insert({
-        id: newId(), post_id: id, keyword_count: keywordCount, status: 'pending', care_sent: false, created_at: iso(ctx),
-      }),
-    );
+    await flagCrisis(ctx, id, keywordCount);
   }
   await earnLeaves(ctx, me.id, 3, '글 작성');
 
@@ -192,16 +236,7 @@ export async function create(ctx: Ctx, inputArg: unknown) {
     );
   }
   if (keywordCount > 0) {
-    const admins = check(await ctx.db.from('users').select('id').eq('role', 'admin').neq('id', me.id)) as Row[];
-    await pushNotifications(
-      ctx,
-      admins.map((a) => ({
-        userId: a.id as string,
-        type: 'crisis' as const,
-        text: `위기 알림: ‘${shorten(title)}’ 글에서 위기 키워드가 감지됐어요. 대시보드에서 확인해 주세요.`,
-        link: '/admin',
-      })),
-    );
+    await notifyCrisis(ctx, me, title);
   }
   return (await toViews(ctx, [await loadPost(ctx, id)]))[0];
 }

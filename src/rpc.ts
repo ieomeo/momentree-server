@@ -26,6 +26,7 @@ export const handlers: Record<string, Handler> = {
   'post.subscribed': posts.subscribedFeed,
   'post.get': posts.get,
   'post.create': posts.create,
+  'post.update': posts.update,
   'post.toggleLike': posts.toggleLike,
   'post.setPrivate': posts.setPrivate,
   'post.remove': posts.remove,
