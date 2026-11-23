@@ -13,9 +13,9 @@ export const ALL = { terms: true, consent: true, privacy: true };
 export const SUPER = { email: 'khs9523007@ajou.ac.kr', password: 'super-pass-1', nickname: '세계수' };
 
 export function setup(overrides: Partial<Env> = {}, mail: 'ok' | 'off' | 'fail' = 'ok') {
-  const db = createFakeDb();
-  const sent: { to: string; code: string }[] = [];
   let clock = Date.parse('2026-11-06T00:00:00Z');
+  const db = createFakeDb(() => new Date(clock));
+  const sent: { to: string; code: string }[] = [];
   const env: Env = {
     authSecret: 'x'.repeat(40), superAdminEmail: SUPER.email, superAdminPassword: SUPER.password,
     superAdminNickname: SUPER.nickname, corsOrigins: [], allowDemoCode: false, mailSenderName: '모먼트리', ...overrides,

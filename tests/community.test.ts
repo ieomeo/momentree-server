@@ -177,17 +177,20 @@ test('신고 처리 · 경고 · 게시 중단 · 도움 안내', async () => {
 
   const postReport = reports.find((r: { targetType: string }) => r.targetType === 'post');
   const commentReport = reports.find((r: { targetType: string }) => r.targetType === 'comment');
-  await t.call(adminId, 'admin.resolveReport', postReport.id, '경고');
-  await t.call(adminId, 'admin.resolveReport', commentReport.id, '게시 중단');
-  assert.equal((await t.call(b.id, 'comment.list', p.id)).length, 0); // 댓글 삭제됨
-  const types = (await t.call(a.id, 'notification.list')).map((n: { type: string }) => n.type);
-  assert.ok(types.includes('warning'));
-  assert.ok(types.includes('removed'));
-
-  await t.call(adminId, 'admin.resolveReport', postReport.id, '게시 중단');
+  await t.call(adminId, 'admin.resolveReport', commentReport.id, '경고 및 게시 중단');
+  assert.equal((await t.call(b.id, 'comment.list', p.id)).length, 0);
+  await t.call(adminId, 'admin.resolveReport', commentReport.id, '문제 없음');
+  assert.equal((await t.call(b.id, 'comment.list', p.id)).length, 1);
+  const before = (await t.call(a.id, 'auth.me')).leaves;
+  await t.call(adminId, 'admin.resolveReport', postReport.id, '이용 제한', 90, true);
   assert.equal((await t.call(b.id, 'post.list', '전체', 'latest')).length, 0);
-  assert.ok((await t.call(a.id, 'notification.list')).filter((n: { type: string }) => n.type === 'removed').length >= 1);
-  await t.call(adminId, 'admin.resolveReport', postReport.id, '이용 제한', 7);
+  assert.equal((await t.call(a.id, 'auth.me')).leaves, before - 3);
+  await t.call(adminId, 'admin.resolveReport', postReport.id, '이용 제한', 90, true);
+  assert.equal((await t.call(a.id, 'auth.me')).leaves, before - 3);
+  await t.call(adminId, 'admin.resolveReport', postReport.id, '문제 없음');
+  assert.equal((await t.call(a.id, 'auth.me')).leaves, before);
+  assert.equal((await t.call(b.id, 'post.list', '전체', 'latest')).length, 1);
+  assert.equal((await t.call(adminId, 'admin.reportHistory', postReport.id)).length, 2);
   assert.ok((await t.call(a.id, 'notification.list')).some((n: { type: string }) => n.type === 'restricted'));
 
   const alert = (await t.call(adminId, 'admin.alerts'))[0];

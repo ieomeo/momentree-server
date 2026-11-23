@@ -17,9 +17,9 @@ export const NOTICE_CATEGORY = '공지글';
 export const CATEGORIES = ['시', '가사', '일기', '단상', '한 줄 문구', '작은 온기', '연결'];
 export const ALL_CATEGORIES = [NOTICE_CATEGORY, ...CATEGORIES];
 export const REPORT_REASONS = ['자극적이거나 위험한 내용(방법·수단 묘사)', '욕설·악성 표현', '스팸·광고', '기타'];
-export const REPORT_ACTIONS = ['문제 없음', '경고', '게시 중단', '이용 제한'];
+export const REPORT_ACTIONS = ['문제 없음', '경고 및 게시 중단', '이용 제한'];
 // 이용 제한 기간(일). 0은 영구 제한이에요.
-export const RESTRICT_DAYS = [1, 3, 7, 30, 0];
+export const RESTRICT_DAYS = [1, 3, 7, 30, 90, 0];
 export const PERMANENT_UNTIL = '9999-12-31T00:00:00.000Z';
 export const MIN_AGE = 14;
 
@@ -198,25 +198,8 @@ export async function pushNotifications(ctx: Ctx, items: NewNotification[]): Pro
   check(await ctx.db.from('notifications').insert(fresh));
 }
 
-export async function addLeafLog(ctx: Ctx, userId: string, type: 'earn' | 'spend', label: string, amount: number): Promise<void> {
-  check(await ctx.db.from('leaf_logs').insert({ id: newId(), user_id: userId, type, label, amount, created_at: iso(ctx) }));
-}
-
-// 나뭇잎 적립: 하루 상한(DAILY_CAP)까지만 쌓여요.
-export async function earnLeaves(ctx: Ctx, userId: string, amount: number, label: string): Promise<void> {
-  const row = check(
-    await ctx.db.from('users').select('id,leaves,earned_today,earned_date').eq('id', userId).maybeSingle(),
-  ) as Row | null;
-  if (!row) return;
-  const today = ctx.now().toISOString().slice(0, 10);
-  const earned = row.earned_date === today ? (row.earned_today as number) : 0;
-  const gain = Math.min(amount, DAILY_CAP - earned);
-  if (gain <= 0) return;
-  check(
-    await ctx.db
-      .from('users')
-      .update({ leaves: (row.leaves as number) + gain, earned_today: earned + gain, earned_date: today })
-      .eq('id', userId),
-  );
-  await addLeafLog(ctx, userId, 'earn', label, gain);
+// DB locks the source and balance, then records the actual credited reward together.
+export async function earnLeaves(ctx: Ctx, userId: string, amount: number, label: string, source: { type: 'post' | 'comment'; id: string }): Promise<void> {
+  check(await ctx.db.rpc('earn_content_leaves', { p_user: userId, p_amount: amount, p_label: label,
+    p_source_type: source.type, p_source_id: source.id, p_now: iso(ctx) }));
 }

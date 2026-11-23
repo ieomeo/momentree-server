@@ -2,21 +2,33 @@ import { HttpError } from '../lib/errors';
 import { hashPassword } from '../lib/security';
 import { assertEmailAvailable, assertNicknameAvailable, assertPassword } from './auth';
 import {
-  Ctx, EMAIL_PATTERN, PERMANENT_UNTIL, REPORT_ACTIONS, RESTRICT_DAYS, Row, UserRow,
+  Ctx, EMAIL_PATTERN, REPORT_ACTIONS, RESTRICT_DAYS, Row, UserRow,
   check, isSuperAdmin, isUniqueViolation, iso, newId, nicknameKey, normEmail, pushNotifications,
-  requireAdmin, requireSuperAdmin, restrictionLabel, shorten, str,
+  requireAdmin, requireSuperAdmin, str,
 } from './common';
 
 const STATUSES = ['pending', 'reviewing', 'done'];
 
+// Stable ordering and paging avoid silently dropping older completed items.
+async function moderationRows(ctx: Ctx, table: 'reports' | 'crisis_alerts') {
+  const rows: Row[] = [];
+  for (let from = 0; ; from += 200) {
+    const batch = check(await ctx.db.from(table).select('*').order('created_at', { ascending: false })
+      .order('id', { ascending: false }).range(from, from + 199)) as Row[];
+    rows.push(...batch);
+    if (batch.length < 200) return rows;
+  }
+}
+
 // ---------- 신고 ----------
 export async function reports(ctx: Ctx) {
   requireAdmin(ctx);
-  const rows = check(await ctx.db.from('reports').select('*').order('created_at', { ascending: false }).limit(200)) as Row[];
+  const rows = await moderationRows(ctx, 'reports');
   return rows.map((r) => ({
     id: r.id as string, targetType: r.target_type as string, targetId: r.target_id as string,
     targetPreview: r.target_preview as string, reason: r.reason as string, detail: (r.detail as string | null) ?? undefined,
     reporterId: (r.reporter_id as string | null) ?? '', status: r.status as string,
+    stopped: r.moderation_stopped === true, days: r.moderation_days as number | null,
     action: (r.action as string | null) ?? undefined, createdAt: r.created_at as string,
   }));
 }
@@ -28,92 +40,42 @@ export async function setReportStatus(ctx: Ctx, idArg: unknown, statusArg: unkno
   check(await ctx.db.from('reports').update({ status }).eq('id', str(idArg, 60)));
 }
 
-// 신고 처리: 문제 없음 / 경고 / 게시 중단 / 이용 제한. 처리 결과는 해당 작성자에게 알림으로 가요.
-// 이용 제한은 기간(1·3·7·30일, 0=영구)을 함께 보내야 하고, 제한 중에는 글쓰기·댓글·공감·구독·신고를 할 수 없어요.
-export async function resolveReport(ctx: Ctx, idArg: unknown, actionArg: unknown, daysArg?: unknown): Promise<void> {
-  requireAdmin(ctx);
-  const action = str(actionArg, 20);
+// 조치·복구·회수·감사 기록은 DB에서 한 트랜잭션으로 적용합니다.
+export async function resolveReport(ctx: Ctx, idArg: unknown, actionArg: unknown, daysArg?: unknown, stopArg?: unknown): Promise<void> {
+  const admin = requireAdmin(ctx);
+  const action = str(actionArg, 30);
   if (!REPORT_ACTIONS.includes(action)) throw new HttpError(400, '처리 방법이 올바르지 않아요.');
-  const report = check(await ctx.db.from('reports').select('*').eq('id', str(idArg, 60)).maybeSingle()) as Row | null;
-  if (!report) throw new HttpError(404, '신고를 찾을 수 없어요.');
-
-  // 신고 대상과 작성자를 먼저 찾아요. (검사에 실패하면 아무것도 바꾸지 않아요)
-  let authorId: string | null = null;
-  let postId: string | null = null;
-  let commentId: string | null = null;
-  if (report.target_type === 'post') {
-    const post = check(await ctx.db.from('posts').select('id,author_id').eq('id', report.target_id as string).maybeSingle()) as Row | null;
-    authorId = (post?.author_id as string | null | undefined) ?? null;
-    postId = post ? (post.id as string) : null;
-  } else {
-    const comment = check(await ctx.db.from('comments').select('id,author_id').eq('id', report.target_id as string).maybeSingle()) as Row | null;
-    authorId = (comment?.author_id as string | null | undefined) ?? null;
-    commentId = comment ? (comment.id as string) : null;
+  const days = action === '이용 제한' ? daysArg : null;
+  if (action === '이용 제한' && (typeof days !== 'number' || !RESTRICT_DAYS.includes(days))) {
+    throw new HttpError(400, '이용 제한 기간을 선택해주세요.');
   }
-
-  let restrictUntil: string | null = null;
-  let periodLabel = '';
-  if (action === '이용 제한') {
-    const days = Number(daysArg);
-    if (!RESTRICT_DAYS.includes(days)) throw new HttpError(400, '이용 제한 기간을 선택해주세요.');
-    if (!authorId) throw new HttpError(400, '작성자를 찾을 수 없어 이용 제한을 적용할 수 없어요.');
-    const author = check(await ctx.db.from('users').select('id,role').eq('id', authorId).maybeSingle()) as Row | null;
-    if (!author) throw new HttpError(400, '작성자를 찾을 수 없어 이용 제한을 적용할 수 없어요.');
-    if (author.role === 'admin') throw new HttpError(403, '운영자 계정은 이용 제한할 수 없어요.');
-    restrictUntil = days === 0 ? PERMANENT_UNTIL : new Date(ctx.now().getTime() + days * 86400000).toISOString();
-    periodLabel = days === 0 ? '영구' : `${days}일`;
-  }
-
-  check(await ctx.db.from('reports').update({ status: 'done', action }).eq('id', report.id as string));
-  if (action === '게시 중단') {
-    if (postId) check(await ctx.db.from('posts').update({ hidden: true }).eq('id', postId));
-    if (commentId) check(await ctx.db.from('comments').delete().eq('id', commentId));
-  }
-  if (restrictUntil && authorId) {
-    check(await ctx.db.from('users').update({ restricted_until: restrictUntil, restriction_reason: report.reason as string }).eq('id', authorId));
-  }
-
-  if (authorId) {
-    const target = `‘${shorten(report.target_preview as string)}’ ${report.target_type === 'post' ? '글' : '댓글'}`;
-    const reason = `사유: ${report.reason}`;
-    if (action === '경고') {
-      await pushNotifications(ctx, [{ userId: authorId, type: 'warning', text: `운영자 경고: ${target}이(가) 커뮤니티 약속에 어긋나요. (${reason})` }]);
-    } else if (action === '게시 중단') {
-      await pushNotifications(ctx, [{ userId: authorId, type: 'removed', text: `${target}이(가) 운영 정책에 따라 게시 중단됐어요. (${reason})` }]);
-    } else if (restrictUntil) {
-      await pushNotifications(ctx, [
-        {
-          userId: authorId,
-          type: 'restricted',
-          text: `운영 정책 위반으로 이용 제한 조치를 받았어요. (기간: ${periodLabel} · ${restrictionLabel(restrictUntil)}, ${reason}) 제한 중에는 글쓰기·댓글·공감·구독을 할 수 없어요.`,
-        },
-      ]);
-    }
-  }
+  const result = await ctx.db.rpc('resolve_moderation', {
+    p_report: str(idArg, 60), p_actor: admin.id, p_action: action, p_days: days, p_stop: stopArg === true,
+  });
+  if (result.error?.code === 'P0001') throw new HttpError(400, result.error.message);
+  check(result);
 }
 
-// 이용 제한 해제: 신고 처리 기록으로 작성자를 찾아 제한을 풀어줘요. (이의 제기가 받아들여졌을 때 등)
-export async function liftRestriction(ctx: Ctx, reportIdArg: unknown): Promise<void> {
+export async function reportHistory(ctx: Ctx, idArg: unknown) {
   requireAdmin(ctx);
-  const report = check(await ctx.db.from('reports').select('*').eq('id', str(reportIdArg, 60)).maybeSingle()) as Row | null;
-  if (!report) throw new HttpError(404, '신고를 찾을 수 없어요.');
-  let authorId: string | null = null;
-  if (report.target_type === 'post') {
-    const post = check(await ctx.db.from('posts').select('author_id').eq('id', report.target_id as string).maybeSingle()) as Row | null;
-    authorId = (post?.author_id as string | null | undefined) ?? null;
-  } else {
-    const comment = check(await ctx.db.from('comments').select('author_id').eq('id', report.target_id as string).maybeSingle()) as Row | null;
-    authorId = (comment?.author_id as string | null | undefined) ?? null;
-  }
-  if (!authorId) throw new HttpError(404, '작성자를 찾을 수 없어요.');
-  check(await ctx.db.from('users').update({ restricted_until: null, restriction_reason: null }).eq('id', authorId));
-  await pushNotifications(ctx, [{ userId: authorId, type: 'notice', text: '이용 제한이 해제됐어요. 다시 글쓰기·댓글·공감·구독을 할 수 있어요.' }]);
+  const rows = check(await ctx.db.from('moderation_history').select('*').eq('report_id', str(idArg, 60))
+    .order('created_at', { ascending: false }).limit(100)) as Row[];
+  return rows.map((r) => ({ id: r.id, action: r.action, stopped: r.stopped, days: r.restriction_days,
+    leafDelta: r.leaf_delta, createdAt: r.created_at }));
+}
+
+// 구버전 클라이언트가 호출하더라도 이 신고의 제한만 해제합니다.
+export async function liftRestriction(ctx: Ctx, idArg: unknown) {
+  requireAdmin(ctx);
+  const row = check(await ctx.db.from('reports').select('moderation_stopped, moderation_until').eq('id', str(idArg, 60)).maybeSingle()) as Row | null;
+  if (!row?.moderation_until) throw new HttpError(400, '이 신고에 새 방식으로 적용된 이용 제한이 없어요.');
+  return resolveReport(ctx, idArg, row.moderation_stopped ? '경고 및 게시 중단' : '문제 없음');
 }
 
 // ---------- 위기 알림 ----------
 export async function alerts(ctx: Ctx) {
   requireAdmin(ctx);
-  const rows = check(await ctx.db.from('crisis_alerts').select('*').order('created_at', { ascending: false }).limit(200)) as Row[];
+  const rows = await moderationRows(ctx, 'crisis_alerts');
   return rows.map((a) => ({
     id: a.id as string, postId: (a.post_id as string | null) ?? '', keywordCount: a.keyword_count as number,
     status: a.status as string, createdAt: a.created_at as string, careSent: a.care_sent as boolean,

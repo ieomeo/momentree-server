@@ -12,7 +12,7 @@ export async function toViews(ctx: Ctx, rows: Row[]) {
   const ids = rows.map((r) => r.id as string);
   const [likes, comments, authors] = await Promise.all([
     selectIn(ctx, 'post_likes', 'post_id,user_id', 'post_id', ids),
-    selectIn(ctx, 'comments', 'post_id', 'post_id', ids),
+    selectIn(ctx, 'comments', 'post_id,hidden', 'post_id', ids),
     usersByIds(ctx, rows.map((r) => r.author_id as string).filter(Boolean)),
   ]);
   return rows.map((r) => {
@@ -26,10 +26,10 @@ export async function toViews(ctx: Ctx, rows: Row[]) {
       content: r.content as string,
       createdAt: r.created_at as string,
       likedBy: likes.filter((l) => l.post_id === r.id).map((l) => l.user_id as string),
-      hidden: r.hidden as boolean,
+      hidden: !!(r.hidden || r.moderation_hidden),
       pinned: r.pinned as boolean,
       isPrivate: r.is_private as boolean,
-      commentCount: comments.filter((c) => c.post_id === r.id).length,
+      commentCount: comments.filter((c) => c.post_id === r.id && !c.hidden).length,
       authorIsAdmin: author?.role === 'admin',
     };
   });
@@ -43,7 +43,7 @@ const time = (p: { createdAt: string }): number => Date.parse(p.createdAt);
 // 공개 글 후보 (최근 순)
 async function publicRows(ctx: Ctx, category: string | null, limit: number): Promise<Row[]> {
   const me = requireUser(ctx);
-  let query = ctx.db.from('posts').select('*').eq('hidden', false).eq('is_private', false);
+  let query = ctx.db.from('posts').select('*').eq('hidden', false).neq('moderation_hidden', true).eq('is_private', false);
   if (category) query = query.eq('category', category);
   const rows = check(await query.order('created_at', { ascending: false }).limit(limit)) as Row[];
   const hidden = await hiddenAuthorIds(ctx, me.id);
@@ -89,7 +89,7 @@ export async function search(ctx: Ctx, queryArg: unknown) {
 export async function mine(ctx: Ctx) {
   const me = requireUser(ctx);
   const rows = check(
-    await ctx.db.from('posts').select('*').eq('author_id', me.id).eq('hidden', false).order('created_at', { ascending: false }).limit(200),
+    await ctx.db.from('posts').select('*').eq('author_id', me.id).eq('hidden', false).neq('moderation_hidden', true).order('created_at', { ascending: false }).limit(200),
   ) as Row[];
   return toViews(ctx, rows);
 }
@@ -99,7 +99,7 @@ export async function subscribedFeed(ctx: Ctx) {
   const subs = check(await ctx.db.from('subscriptions').select('author_id').eq('subscriber_id', me.id)) as Row[];
   if (subs.length === 0) return [];
   const rows = (await selectIn(ctx, 'posts', '*', 'author_id', subs.map((s) => s.author_id as string)))
-    .filter((r) => !r.hidden && !r.is_private)
+    .filter((r) => !r.hidden && !r.moderation_hidden && !r.is_private)
     .sort((a, b) => Date.parse(b.created_at as string) - Date.parse(a.created_at as string))
     .slice(0, 100);
   return toViews(ctx, rows);
@@ -123,7 +123,7 @@ async function assertCanView(ctx: Ctx, me: UserRow, post: Row, reviewMode = fals
     }
     if (!allowed) throw new HttpError(404, '글을 찾을 수 없어요.');
   }
-  if (post.hidden && !(reviewMode && me.role === 'admin')) throw new HttpError(404, '글을 찾을 수 없어요.');
+  if ((post.hidden || post.moderation_hidden) && !(reviewMode && me.role === 'admin')) throw new HttpError(404, '글을 찾을 수 없어요.');
   if (!isAuthor && post.author_id && (await hiddenAuthorIds(ctx, me.id)).has(post.author_id as string)) {
     throw new HttpError(404, '글을 찾을 수 없어요.');
   }
@@ -156,13 +156,13 @@ export async function update(ctx: Ctx, idArg: unknown, inputArg: unknown) {
   const id = str(idArg, 60);
   const post = await loadPost(ctx, id);
   if (post.author_id !== me.id) throw new HttpError(403, '자신이 쓴 글만 수정할 수 있어요.');
-  if (post.hidden) throw new HttpError(404, '글을 찾을 수 없어요.');
+  if (post.hidden || post.moderation_hidden) throw new HttpError(404, '글을 찾을 수 없어요.');
   const fields = postFields(me, inputArg);
   if ((fields.category === NOTICE_CATEGORY) !== (post.category === NOTICE_CATEGORY)) {
     throw new HttpError(400, '수정할 때는 공지글 유형을 변경할 수 없어요.');
   }
   const updated = check(await ctx.db.from('posts').update(fields)
-    .eq('id', id).eq('author_id', me.id).eq('hidden', false).select('*').maybeSingle()) as Row | null;
+    .eq('id', id).eq('author_id', me.id).eq('hidden', false).neq('moderation_hidden', true).select('*').maybeSingle()) as Row | null;
   if (!updated) throw new HttpError(404, '글을 찾을 수 없어요.');
   const count = countCrisisKeywords(`${fields.title} ${fields.content}`);
   if (count > 0 && (fields.title !== post.title || fields.content !== post.content)) {
@@ -211,7 +211,7 @@ export async function create(ctx: Ctx, inputArg: unknown) {
   if (keywordCount > 0) {
     await flagCrisis(ctx, id, keywordCount);
   }
-  await earnLeaves(ctx, me.id, 3, '글 작성');
+  await earnLeaves(ctx, me.id, 3, '글 작성', { type: 'post', id });
 
   // 알림: 공지글 → 모든 이용자, 일반 글 → 나를 구독한 사람, 위기 키워드 → 운영자
   const link = `/post/${id}`;
@@ -258,7 +258,7 @@ export async function toggleLike(ctx: Ctx, idArg: unknown): Promise<void> {
   if (isUniqueViolation(inserted.error)) return; // 동시에 두 번 눌러도 한 번만
   check(inserted);
   if (post.author_id && post.author_id !== me.id) {
-    await earnLeaves(ctx, post.author_id as string, 1, '공감 받음');
+    await earnLeaves(ctx, post.author_id as string, 1, '공감 받음', { type: 'post', id: post.id as string });
     await pushNotifications(ctx, [
       { userId: post.author_id as string, type: 'like', text: `${me.nickname}님이 ‘${shorten(post.title as string)}’ 글에 공감했어요`, link: `/post/${post.id}` },
     ]);
@@ -305,7 +305,7 @@ export async function listComments(ctx: Ctx, postIdArg: unknown) {
     await ctx.db.from('comments').select('*').eq('post_id', post.id as string).order('created_at', { ascending: true }),
   ) as Row[];
   const hidden = await hiddenAuthorIds(ctx, me.id);
-  const visible = rows.filter((c) => !hidden.has(c.author_id as string));
+  const visible = rows.filter((c) => !c.hidden && !hidden.has(c.author_id as string));
   const authors = await usersByIds(ctx, visible.map((c) => c.author_id as string));
   return visible.map((c) => ({
     id: c.id as string,
@@ -325,8 +325,9 @@ export async function addComment(ctx: Ctx, postIdArg: unknown, contentArg: unkno
   if (content.length > 300) throw new HttpError(400, '댓글은 300자 이하로 입력해주세요.');
   const post = await loadPost(ctx, str(postIdArg, 60));
   await assertCanView(ctx, me, post);
-  check(await ctx.db.from('comments').insert({ id: newId(), post_id: post.id, author_id: me.id, content, created_at: iso(ctx) }));
-  await earnLeaves(ctx, me.id, 1, '댓글 작성');
+  const commentId = newId();
+  check(await ctx.db.from('comments').insert({ id: commentId, post_id: post.id, author_id: me.id, content, created_at: iso(ctx) }));
+  await earnLeaves(ctx, me.id, 1, '댓글 작성', { type: 'comment', id: commentId });
   if (post.author_id && post.author_id !== me.id) {
     await pushNotifications(ctx, [
       {

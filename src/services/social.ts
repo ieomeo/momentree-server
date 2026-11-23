@@ -1,7 +1,7 @@
 import { HttpError } from '../lib/errors';
 import {
   Ctx, NOTE_MAX, REPORT_REASONS, Row, SUBSCRIBE_COST,
-  addLeafLog, assertNotRestricted, check, iso, isUniqueViolation, newId, pushNotifications, requireUser, selectIn, shorten, str,
+  assertNotRestricted, check, iso, newId, pushNotifications, requireUser, selectIn, shorten, str,
 } from './common';
 
 // ---------- 구독 · 차단 ----------
@@ -16,14 +16,9 @@ export async function subscribe(ctx: Ctx, authorIdArg: unknown): Promise<void> {
     await ctx.db.from('subscriptions').select('author_id').eq('subscriber_id', me.id).eq('author_id', authorId).maybeSingle(),
   );
   if (already) throw new HttpError(409, '이미 구독 중이에요.');
-  const fresh = check(await ctx.db.from('users').select('leaves').eq('id', me.id).single()) as Row;
-  if ((fresh.leaves as number) < SUBSCRIBE_COST) throw new HttpError(400, `나뭇잎이 부족해요. (${SUBSCRIBE_COST}개 필요)`);
-
-  const inserted = await ctx.db.from('subscriptions').insert({ subscriber_id: me.id, author_id: authorId });
-  if (isUniqueViolation(inserted.error)) throw new HttpError(409, '이미 구독 중이에요.');
-  check(inserted);
-  check(await ctx.db.from('users').update({ leaves: (fresh.leaves as number) - SUBSCRIBE_COST }).eq('id', me.id));
-  await addLeafLog(ctx, me.id, 'spend', `구독 (${target.nickname})`, SUBSCRIBE_COST);
+  const result = check(await ctx.db.rpc('subscribe_with_leaves', { p_user: me.id, p_author: authorId, p_label: `구독 (${target.nickname})` }));
+  if (result === 'insufficient') throw new HttpError(400, `나뭇잎이 부족해요. (${SUBSCRIBE_COST}개 필요)`);
+  if (result === 'duplicate') throw new HttpError(409, '이미 구독 중이에요.');
   await pushNotifications(ctx, [{ userId: authorId, type: 'subscribe', text: `${me.nickname}님이 나를 구독했어요` }]);
 }
 

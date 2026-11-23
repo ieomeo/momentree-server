@@ -49,6 +49,7 @@ export const handlers: Record<string, Handler> = {
   'report.create': social.createReport,
 
   'admin.reports': admin.reports,
+  'admin.reportHistory': admin.reportHistory,
   'admin.alerts': admin.alerts,
   'admin.setReportStatus': admin.setReportStatus,
   'admin.resolveReport': admin.resolveReport,
