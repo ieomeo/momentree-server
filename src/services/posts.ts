@@ -41,9 +41,10 @@ const rank = (p: { category: string; pinned?: boolean }): number => (p.category 
 const time = (p: { createdAt: string }): number => Date.parse(p.createdAt);
 
 // 공개 글 후보 (최근 순)
-async function publicRows(ctx: Ctx, category: string | null, limit: number): Promise<Row[]> {
+async function publicRows(ctx: Ctx, category: string | null, limit: number, firstOnly = false): Promise<Row[]> {
   const me = requireUser(ctx);
   let query = ctx.db.from('posts').select('*').eq('hidden', false).neq('moderation_hidden', true).eq('is_private', false);
+  if (firstOnly) query = query.eq('is_first_post', true).not('author_id', 'is', null);
   if (category) query = query.eq('category', category);
   const rows = check(await query.order('created_at', { ascending: false }).limit(limit)) as Row[];
   const hidden = await hiddenAuthorIds(ctx, me.id);
@@ -53,8 +54,8 @@ async function publicRows(ctx: Ctx, category: string | null, limit: number): Pro
 // ---------- 목록 · 검색 ----------
 export async function list(ctx: Ctx, categoryArg: unknown, sortArg: unknown) {
   const category = str(categoryArg, 50) || '전체';
-  const sort = sortArg === 'likes' ? 'likes' : 'latest';
-  const rows = await publicRows(ctx, category === '전체' ? null : category, 200);
+  const sort = sortArg === 'likes' || sortArg === 'newcomers' ? sortArg : 'latest';
+  const rows = await publicRows(ctx, category === '전체' ? null : category, 200, sort === 'newcomers');
   let views: View[] = await toViews(ctx, rows);
   if (sort === 'likes') {
     // 공감순은 최근 24시간 안에 올린 글만 (공지·고정글은 항상 맨 위에 남아요)
@@ -63,7 +64,7 @@ export async function list(ctx: Ctx, categoryArg: unknown, sortArg: unknown) {
   }
   views.sort(
     (a, b) =>
-      rank(b) - rank(a) ||
+      (sort === 'newcomers' ? 0 : rank(b) - rank(a)) ||
       (sort === 'likes' ? b.likedBy.length - a.likedBy.length : 0) ||
       time(b) - time(a),
   );
