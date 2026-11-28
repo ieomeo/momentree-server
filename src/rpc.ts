@@ -1,4 +1,4 @@
-import * as profile from './services/profile';
+﻿import * as profile from './services/profile';
 import * as admin from './services/admin';
 import { migrate } from './services/supabase-auth';
 import * as auth from './services/auth';
@@ -58,7 +58,7 @@ export const handlers: Record<string, Handler> = {
 
   'admin.reports': admin.reports,
   'admin.reportHistory': admin.reportHistory,
-  'admin.crisisKeywords': admin.crisisKeywords,
+  'admin.crisisKeywords': async (ctx) => admin.crisisKeywords(ctx),
   'admin.alerts': admin.alerts,
   'admin.setReportStatus': admin.setReportStatus,
   'admin.resolveReport': admin.resolveReport,
