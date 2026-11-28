@@ -1,3 +1,4 @@
+import { CRISIS_GROUPS } from '../lib/crisis';
 import { HttpError } from '../lib/errors';
 import { hashPassword } from '../lib/security';
 import { assertEmailAvailable, assertNicknameAvailable, assertPassword } from './auth';
@@ -235,3 +236,5 @@ export async function unblockEmail(ctx: Ctx, emailArg: unknown): Promise<void> {
   requireSuperAdmin(ctx);
   check(await ctx.db.from('blocked_emails').delete().eq('email', normEmail(str(emailArg, 200))));
 }
+
+export function crisisKeywords(ctx: Ctx) { requireAdmin(ctx); return CRISIS_GROUPS; }

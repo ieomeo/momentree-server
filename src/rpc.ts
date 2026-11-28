@@ -58,6 +58,7 @@ export const handlers: Record<string, Handler> = {
 
   'admin.reports': admin.reports,
   'admin.reportHistory': admin.reportHistory,
+  'admin.crisisKeywords': admin.crisisKeywords,
   'admin.alerts': admin.alerts,
   'admin.setReportStatus': admin.setReportStatus,
   'admin.resolveReport': admin.resolveReport,

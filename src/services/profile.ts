@@ -1,4 +1,4 @@
-﻿import { HttpError } from '../lib/errors';
+import { HttpError } from '../lib/errors';
 import { assertNotRestricted, check, hiddenAuthorIds, isSuperAdmin, isUniqueViolation, newId, requireUser, str, usersByIds } from './common';
 import type { Ctx, Row } from './common';
 
@@ -21,7 +21,7 @@ export async function profile(ctx: Ctx, arg: unknown, startArg: unknown) {
 export async function garden(ctx: Ctx) {
   const me = requireUser(ctx);
   const [user, total] = await Promise.all([ctx.db.from('users').select('bio').eq('id', me.id).single(), ctx.db.rpc('garden_total', { p_user: me.id })]);
-  const u = check(user) as Row | null; return { bio: typeof u?.bio === 'string' ? u.bio : '', total: Number(check(total)) };
+  return { bio: check(user).bio as string, total: Number(check(total)) };
 }
 export async function saveBio(ctx: Ctx, arg: unknown) {
   const me = requireUser(ctx);
