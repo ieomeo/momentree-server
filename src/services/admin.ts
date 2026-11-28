@@ -26,7 +26,7 @@ export async function reports(ctx: Ctx) {
   requireAdmin(ctx);
   const rows = await moderationRows(ctx, 'reports');
   return rows.map((r) => ({
-    id: r.id as string, targetType: r.target_type as string, targetId: r.target_id as string,
+    memo: String(r.operator_memo ?? ''), id: r.id as string, targetType: r.target_type as string, targetId: r.target_id as string,
     targetPreview: r.target_preview as string, reason: r.reason as string, detail: (r.detail as string | null) ?? undefined,
     reporterId: (r.reporter_id as string | null) ?? '', status: r.status as string,
     targetDeleted: r.moderation_deleted === true, stopped: r.moderation_stopped === true, days: r.moderation_days as number | null,
@@ -94,7 +94,7 @@ export async function alerts(ctx: Ctx) {
   requireAdmin(ctx);
   const rows = await moderationRows(ctx, 'crisis_alerts');
   return rows.map((a) => ({
-    id: a.id as string, postId: (a.post_id as string | null) ?? '', keywordCount: a.keyword_count as number,
+    memo: String(a.operator_memo ?? ''), id: a.id as string, postId: (a.post_id as string | null) ?? '', keywordCount: a.keyword_count as number,
     status: a.status as string, createdAt: a.created_at as string, careSent: a.care_sent as boolean,
   }));
 }
@@ -238,3 +238,9 @@ export async function unblockEmail(ctx: Ctx, emailArg: unknown): Promise<void> {
 }
 
 export function crisisKeywords(ctx: Ctx) { requireAdmin(ctx); return CRISIS_GROUPS; }
+
+export async function saveMemo(ctx: Ctx, kind: unknown, id: unknown, memo: unknown) {
+  requireAdmin(ctx);
+  if ((kind !== 'alert' && kind !== 'report') || typeof memo !== 'string' || memo.length > 2000) throw new HttpError(400, '메모는 2,000자까지 입력할 수 있어요.');
+  check(await ctx.db.from(kind === 'alert' ? 'crisis_alerts' : 'reports').update({operator_memo: memo}).eq('id', str(id, 60)).select('id').single());
+}
